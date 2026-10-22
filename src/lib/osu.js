@@ -723,6 +723,7 @@ export async function searchOsuBeatmaps(query, options = {}) {
 
   const modeMap = { osu: '0', taiko: '1', fruits: '2', mania: '3' };
   const modeParam = options.mode && modeMap[options.mode] ? modeMap[options.mode] : null;
+  const selectedMode = modeParam ? options.mode : 'all';
 
   // 'ranked' is the "Ranked & Loved" filter: RANKED_LOVED_STATUSES (beatmapFormat.js). The
   // upstream `s=` is only a pool hint; the local isRankedStatus filter below decides.
@@ -768,6 +769,11 @@ export async function searchOsuBeatmaps(query, options = {}) {
     answered += 1;
 
     let sets = data?.beatmapsets || [];
+    // The upstream m= filter is a retrieval hint. Only a native difficulty in the
+    // requested ruleset qualifies a set for this search or its fallback results.
+    if (modeParam) {
+      sets = sets.filter(set => (set.beatmaps || []).some(beatmap => beatmap.mode === selectedMode));
+    }
     if (isRankedOnly) {
       sets = sets.filter(bm => isRankedStatus(bm.status));
     }
@@ -833,7 +839,7 @@ export async function searchOsuBeatmaps(query, options = {}) {
   const minThreshold = strict.minScore;
   const filteredSets = allFoundSets.filter(s => Number.isFinite(s._score) && s._score >= minThreshold);
 
-  const formatted = filteredSets.map(s => ({ ...formatBeatmapset(s), matchScore: s._score }));
+  const formatted = filteredSets.map(s => ({ ...formatBeatmapset(s, selectedMode), matchScore: s._score }));
 
   // Stage 4: when nothing passed, say *why*. "No beatmaps found" and "this song exists on
   // osu!, but not by this artist" are different answers, and the second one is the whole
@@ -870,7 +876,7 @@ export async function searchOsuBeatmaps(query, options = {}) {
       // cleared the cutoff.
       rejection = { kind: 'artist-unknown', artist: targetArtist };
       results = titleMatches.map(bm => ({
-        ...formatBeatmapset(bm),
+        ...formatBeatmapset(bm, selectedMode),
         matchScore: null,
         titleOnly: true,
       }));
@@ -895,7 +901,7 @@ export async function searchOsuBeatmaps(query, options = {}) {
         // work normally -- but flagged. `artistOverride` is what stops page.js auto-selecting
         // them, and `matchScore: null` records that they never passed the gate.
         results = titleMatches.map(bm => ({
-          ...formatBeatmapset(bm),
+          ...formatBeatmapset(bm, selectedMode),
           matchScore: null,
           artistOverride: true,
         }));
@@ -919,8 +925,8 @@ export async function searchOsuBeatmaps(query, options = {}) {
 /**
  * Normalizes beatmapset object for frontend consumption.
  */
-function formatBeatmapset(set) {
-  const diffs = (set.beatmaps || []).map(b => ({
+function formatBeatmapset(set, mode = 'all') {
+  const diffs = (set.beatmaps || []).filter(b => !mode || mode === 'all' || b.mode === mode).map(b => ({
     id: b.id,
     difficultyRating: b.difficulty_rating,
     version: b.version,

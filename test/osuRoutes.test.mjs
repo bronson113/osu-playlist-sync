@@ -123,6 +123,31 @@ test('batch search returns a separate result for each song', async () => {
   assert.ok(calls.some(call => call.url.includes('second')));
 });
 
+test('taiko search excludes sets without a native taiko difficulty in GET and POST', async () => {
+  const set = (id, modes) => ({
+    id, title: 'Back Here Again', artist: 'EggPlantEgg', creator: 'mapper', status: 'ranked',
+    beatmaps: modes.map((mode, index) => ({ id: id * 10 + index, mode, version: mode, difficulty_rating: 3 })),
+  });
+  const standardOnly = set(2086155, ['osu']);
+  const mixed = set(2086156, ['osu', 'taiko']);
+  const withoutDifficulties = set(2086157, []);
+  withOsu(() => Response.json({ beatmapsets: [standardOnly, mixed, withoutDifficulties], total: 3 }));
+  const params = 'q=EggPlantEgg+Back+Here+Again&title=Back+Here+Again&artist=EggPlantEgg&source=spotify&mode=taiko&status=any';
+  const get = await search.GET(clientFor()(`/api/osu/search?${params}`));
+  assert.equal(get.status, 200);
+  const single = await get.json();
+  assert.deepEqual(single.beatmapsets.map(item => item.id), [mixed.id]);
+  assert.deepEqual(single.beatmapsets[0].difficulties.map(item => item.mode), ['taiko']);
+
+  const post = await search.POST(new Request('http://localhost/api/osu/search', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.245' },
+    body: JSON.stringify({ queries: [{ id: 'song-1', params }] }),
+  }));
+  assert.equal(post.status, 200);
+  assert.deepEqual((await post.json()).results[0].result.beatmapsets.map(item => item.id), [mixed.id]);
+});
+
 test('batch search stops at three upstream searches and cancels them on disconnect', async () => {
   const controller = new AbortController();
   let started = 0;

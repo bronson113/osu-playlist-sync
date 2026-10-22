@@ -730,8 +730,10 @@ export default function Home() {
       setSearchProgress(Math.round((completedCount / targets.length) * 100));
     }
 
-    setIsSearching(false);
-    if (!listDropped()) osuAudio.playSuccess();
+    if (!listDropped()) {
+      setIsSearching(false);
+      osuAudio.playSuccess();
+    }
   };
 
   // A search with no answer leaves the row matchless, and a matchless row is never selected.
@@ -781,6 +783,10 @@ export default function Home() {
   const rematchVisiblePage = (nextMode, nextStatus, nextThreshold) => {
     if (songs.length === 0) return;
 
+    songListGenerationRef.current += 1;
+    for (const controller of activeSearchRequestsRef.current) controller.abort();
+    activeSearchRequestsRef.current.clear();
+    setIsSearching(false);
     const reset = songs.map(s => ({ ...s, ...blankMatchState() }));
     setSongs(reset);
     setPlaylistSelectedIds(new Set());
@@ -918,6 +924,7 @@ export default function Home() {
       ? { ...s, cleanQuery: customQuery, ...(manualQuery ? { manualQuery } : {}), isSearching: true }
       : s));
 
+    const generation = songListGenerationRef.current;
     try {
       const queryParams = buildSearchRequest(song, {
         mode,
@@ -926,11 +933,10 @@ export default function Home() {
         manualQuery,
       });
 
-      const generation = songListGenerationRef.current;
       const outcome = await pacedSearch(queryParams, {
         shouldSkip: () => songListGenerationRef.current !== generation,
       });
-      if (outcome.skipped) return;
+      if (outcome.skipped || songListGenerationRef.current !== generation) return;
       const { res, result } = outcome;
 
       if (result.isDemo) {
@@ -968,7 +974,7 @@ export default function Home() {
       osuAudio.playSuccess();
     } catch (err) {
       console.error('Manual search failed:', err);
-      markSearchFailed(songId, 'failed');
+      if (songListGenerationRef.current === generation) markSearchFailed(songId, 'failed');
     }
   };
 
@@ -1069,6 +1075,7 @@ export default function Home() {
     for (const controller of activeSearchRequestsRef.current) controller.abort();
     activeSearchRequestsRef.current.clear();
     cancelBatchHolding('playlist');
+    setIsSearching(false);
     setSongs([]);
     setPlaylistSelectedIds(new Set());
     setPlaylistMeta(null);
