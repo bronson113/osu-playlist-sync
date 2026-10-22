@@ -14,7 +14,7 @@ let tokenExpiresAt = 0;
 /**
  * Get an osu! API v2 access token using Client Credentials.
  */
-export async function getOsuAccessToken() {
+export async function getOsuAccessToken({ signal } = {}) {
   const clientId = process.env.OSU_CLIENT_ID;
   const clientSecret = process.env.OSU_CLIENT_SECRET;
 
@@ -31,6 +31,7 @@ export async function getOsuAccessToken() {
     const response = await fetch('https://osu.ppy.sh/oauth/token', {
       method: 'POST',
       cache: 'no-store',
+      signal,
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Accept': 'application/json',
@@ -66,9 +67,10 @@ const OSU_API_BASE = 'https://osu.ppy.sh/api/v2';
  * Authenticated GET against the osu! API v2. Throws with `.status` so callers
  * can distinguish rate limits (429) from genuine misses.
  */
-async function osuApiGet(path, token) {
+async function osuApiGet(path, token, { signal } = {}) {
   const res = await fetch(`${OSU_API_BASE}${path}`, {
     cache: 'no-store',
+    signal,
     headers: {
       'Authorization': `Bearer ${token}`,
       'Accept': 'application/json',
@@ -521,7 +523,7 @@ export function aliasesFromSets(artist, sets) {
  * Uses the `artist=` search operator, verified live to be both supported and purer than a
  * bare text query.
  */
-export async function probeOsuArtist(artist, token) {
+export async function probeOsuArtist(artist, token, { signal } = {}) {
   const key = normalizeForComparison(artist);
   if (!key) return null;
   const cached = probeCacheGet(key);
@@ -530,11 +532,12 @@ export async function probeOsuArtist(artist, token) {
   let probe;
   try {
     const path = `/beatmapsets/search?q=${encodeURIComponent(`artist=${artist}`)}&sort=relevance_desc&s=any`;
-    const data = await osuApiGet(path, token);
+    const data = await osuApiGet(path, token, { signal });
     const sets = data.beatmapsets || [];
 
     probe = { artist, count: sets.length, aliases: aliasesFromSets(artist, sets) };
   } catch (e) {
+    if (signal?.aborted) throw e;
     // A failed probe must not be cached as "this artist does not exist" -- that would turn a
     // transient 429 into a confident, wrong rejection. Cache an explicit `failed` marker
     // instead: unknown for scoring purposes, but not re-requested for every remaining track
@@ -600,11 +603,11 @@ export function resolveArtistTrust(artist, candidates, probe) {
   return { artistConfidence: 'none', aliases: null };
 }
 
-async function verifyLowConfidenceArtist(artist, candidates, token) {
+async function verifyLowConfidenceArtist(artist, candidates, token, signal) {
   const fromPool = resolveArtistTrust(artist, candidates, undefined);
   if (!fromPool.needsProbe) return { ...fromPool, probed: false };
 
-  const probe = await probeOsuArtist(artist, token);
+  const probe = await probeOsuArtist(artist, token, { signal });
   return { ...resolveArtistTrust(artist, candidates, probe), probed: true };
 }
 
@@ -650,7 +653,9 @@ const STRUCTURED_SOURCES = new Set(['spotify', 'apple', 'osu-player']);
  * Search beatmapsets on osu! API v2 with smart fallbacks, mode filtering, and strict status filtering.
  */
 export async function searchOsuBeatmaps(query, options = {}) {
-  const token = await getOsuAccessToken();
+  const signal = options.signal;
+  const token = await getOsuAccessToken({ signal });
+  signal?.throwIfAborted();
 
   if (!token) {
     return { beatmapsets: [], total: 0, isDemo: true };
@@ -749,8 +754,9 @@ export async function searchOsuBeatmaps(query, options = {}) {
 
     let data;
     try {
-      data = await osuApiGet(searchPath, token);
+      data = await osuApiGet(searchPath, token, { signal });
     } catch (e) {
+      if (signal?.aborted) throw e;
       if (e.status === 429) {
         console.warn(`[osu! Search] 429 for query "${q}" (rate limited)`);
         throw e;
@@ -803,7 +809,7 @@ export async function searchOsuBeatmaps(query, options = {}) {
   // Rescoring is in-memory; the only possible extra network call is a single probe, and only
   // when no candidate named the artist exactly.
   if (targetArtist && !structuredArtist) {
-    const verdict = await verifyLowConfidenceArtist(targetArtist, [...allFoundSets, ...gatedOut], token);
+    const verdict = await verifyLowConfidenceArtist(targetArtist, [...allFoundSets, ...gatedOut], token, signal);
     artistConfidence = verdict.artistConfidence;
     aliases = verdict.aliases;
     scoreOptions = { artistConfidence, aliases, ...floors };
@@ -874,7 +880,7 @@ export async function searchOsuBeatmaps(query, options = {}) {
       // Both return no beatmaps; they are very different things to show a user.
       let absent = false;
       if (targetArtist && artistConfidence === 'high') {
-        const probe = await probeOsuArtist(targetArtist, token);
+        const probe = await probeOsuArtist(targetArtist, token, { signal });
         absent = Boolean(probe && probe.count === 0);
       }
 
